@@ -152,7 +152,7 @@ class CondUNet(nn.Module):
         skip_connections = []
         for i, downsampler in enumerate(self.downsamplers):
             
-            # Apply FiLM for conditioning
+            # Apply FiLM for condi
             film_mul = self.film_muls[i](interpolated_lr)
             film_add = self.film_adds[i](interpolated_lr)
             x = film_mul * x.permute(1,2,0) + film_add
@@ -417,7 +417,7 @@ if __name__ == "__main__":
     # output = torch.sum(output)
     # output.backward()
     
-    unet = UNetModel()
+    unet = UNet()
     image = torch.randn(16, 3, 224, 224)
     output = unet(image)
     print(output.shape)

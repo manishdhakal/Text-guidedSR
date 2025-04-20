@@ -3,6 +3,7 @@ defaults:
   - early_stopping
   - model_summary
   - rich_progress_bar
+  - lr_monitor
   - _self_
 
 model_checkpoint:
@@ -15,7 +16,7 @@ model_checkpoint:
 
 early_stopping:
   monitor: "val/psnr"
-  patience: 30
+  patience: 5
   min_delta: 0.0001
   mode: "max"
 

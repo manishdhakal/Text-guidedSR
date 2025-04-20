@@ -74,7 +74,10 @@ class TSRDataset(Dataset):
                 [
                     T.Resize(size=img_size),
                     T.ToTensor(),
-                    T.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
+                    T.Normalize(
+                        mean=(0.48145466, 0.4578275, 0.40821073),
+                        std=(0.26862954, 0.26130258, 0.27577711),
+                    ),
                 ]
             )
 
@@ -103,6 +106,11 @@ class TSRDataset(Dataset):
         image_lr = TF.resize(
             image_hr,
             size=(self.img_size[0] // self.scale, self.img_size[1] // self.scale),
+        )
+        image_lr = TF.resize(
+            image_lr,
+            size=(self.img_size),
+            interpolation=T.InterpolationMode.BICUBIC,
         )
 
         tokenizer_op = self.tokenizer(
@@ -343,9 +351,9 @@ if __name__ == "__main__":
         pin_memory=False,
     )
     # train_module = datamodule.train_dataloader()
-    
+
     # train_point = next(iter(train_module))
-    
+
     trainset = TSRDataset(
         images_dir=os.path.join("data/images/train2017"),
         caps_file=os.path.join("data/llava1.5_coco2017train_captions.json"),
@@ -358,10 +366,8 @@ if __name__ == "__main__":
     # for i, (image_lr, image_hr) in enumerate(zip(train_point["image_lr"], train_point["image_hr"])):
     image_lr = train_point["image_lr"]
     image_hr = train_point["image_hr"]
-    
+
     img = T.ToPILImage()(image_lr)
     img.save(f"tmp/train_lr.png")
     img = T.ToPILImage()(image_hr)
     img.save(f"tmp/train_hr.png")
-    
-    

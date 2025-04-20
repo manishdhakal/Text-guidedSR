@@ -5,7 +5,7 @@
 
 defaults:
   - override /data: tsr
-  - override /model: tsr
+  - override /model: clip_guided_tsr
   - override /callbacks: default
   - override /trainer: default
   - override /logger: wandb
@@ -19,20 +19,21 @@ seed: 12345
 
 trainer:
   min_epochs: 10
-  max_epochs: 100
+  max_epochs: 200
   # gradient_clip_val: 0.5
   accelerator: gpu
-  devices: 1
+  devices: [2,3,4,5]
+  precision: bf16
   
 
 model:
   optimizer:
-    lr: 0.05
+    lr: 5e-4
   net:
     hr_size: 224
 
 data:
-  batch_size: 32
+  batch_size: 64
   scale: 8
 
 logger:

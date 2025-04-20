@@ -7,13 +7,18 @@ from torchmetrics.image import PeakSignalNoiseRatio
 
 from pytorch_lightning.loggers import WandbLogger
 
-torch.autograd.set_detect_anomaly(True)
+from diffusers import DDPMScheduler
+
+from src.losses.clip_sim_loss import CLIPSimilarityLoss
+
+
+# torch.autograd.set_detect_anomaly(True)
 
 
 def denormalize(
     image: torch.Tensor,
-    mean: List[float] = (0.485, 0.456, 0.406),
-    std: List[float] = (0.229, 0.224, 0.225),
+    mean: List[float] = (0.48145466, 0.4578275, 0.40821073),
+    std: List[float] = (0.26862954, 0.26130258, 0.27577711),
 ) -> torch.Tensor:
     dtype = image.dtype
     device = image.device
@@ -62,7 +67,8 @@ class TSRBaseModule(LightningModule):
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
         compile: bool,
-        diff_steps = 100,
+        diff_steps=100,
+        beta: float = 0.1,
     ) -> None:
         """Initialize a `MNISTLitModule`.
 
@@ -78,21 +84,74 @@ class TSRBaseModule(LightningModule):
 
         self.net = net
 
+        # Noise scheduler for the diffusion model
+        self.noise_scheduler = DDPMScheduler(
+            num_train_timesteps=diff_steps, beta_schedule="squaredcos_cap_v2"
+        )
+
         # loss function
-        self.criterion = torch.nn.L1Loss()
+        self.recon_criterion = torch.nn.MSELoss()
+        self.similarity_criterion = CLIPSimilarityLoss(clip_model=self.net.clip_model)
 
         # metric objects for calculating and averaging accuracy across batches
-        self.train_psnr = PeakSignalNoiseRatio(data_range=1.0)
+        # self.train_psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.test_psnr = PeakSignalNoiseRatio(data_range=1.0)
 
         # for averaging loss across batches
         self.train_loss = MeanMetric()
         self.val_loss = MeanMetric()
-        self.test_loss = MeanMetric()
+        # self.test_loss = MeanMetric()
 
         # for tracking best so far validation accuracy
         self.val_psnr_best = MaxMetric()
+
+    def get_clean_estimate(
+        self,
+        predicted_noise: torch.Tensor,
+        noisy_input: torch.Tensor,
+        timesteps: torch.Tensor,
+    ) -> torch.Tensor:
+        """Get the clean estimate of the input image.
+        :param predicted_noise: The predicted noise from the model.
+        :param noisy_input: The noisy input image.
+        :param timesteps: The timesteps used for the diffusion process.
+        :return: The clean estimate of the input image.
+        """
+        B = noisy_input.shape[0]
+        
+        alpha_cumprod = self.noise_scheduler.alphas_cumprod[timesteps].to(self.device)
+        sqrt_alpha_prod = torch.sqrt(alpha_cumprod).view(B, 1, 1, 1)
+        sqrt_one_minus_alpha_prod = torch.sqrt(1 - alpha_cumprod).view(B, 1, 1, 1)
+
+        # Get the clean estimate of the input
+        return (
+            noisy_input - sqrt_one_minus_alpha_prod * predicted_noise
+        ) / sqrt_alpha_prod
+
+    def inference_step(self, batch) -> None:
+        image_lr, input_ids, attention_mask, image_hr = (
+            batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")
+        )
+
+        x = torch.randn_like(image_lr).to(self.device)
+        for i, t in enumerate(self.noise_scheduler.timesteps):
+            # Get the predicted noise
+            residual = self.forward(
+                x=x,
+                t=t,
+                lr_image=image_lr,
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            x = self.noise_scheduler.step(residual, t, x).prev_sample
+
+        # denormalize images for psnr calculation
+        reconstructed = image_lr + x
+        reconstructed = denormalize(reconstructed).clamp(0, 1)
+        image_hr = denormalize(image_hr).clamp(0, 1)
+
+        return reconstructed, image_hr
 
     def forward(self, **kwargs) -> torch.Tensor:
         """Perform a single forward pass through the network."""
@@ -102,39 +161,38 @@ class TSRBaseModule(LightningModule):
         """Lightning hook that is called when training begins."""
         # by default lightning executes validation step sanity checks before training starts,
         # so it's worth to make sure validation metrics don't store results from these checks
-        self.val_loss.reset()
+        # self.val_loss.reset()
         self.val_psnr.reset()
         self.val_psnr_best.reset()
 
-    def model_step(
-        self, batch: Tuple[torch.Tensor, torch.Tensor]
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Perform a single model step on a batch of data.
+    # def model_step(
+    #     self, batch: Tuple[torch.Tensor, torch.Tensor]
+    # ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    #     """Perform a single model step on a batch of data.
 
-        :param batch: A batch of data (a tuple) containing the input tensor of images and target labels.
+    #     :param batch: A batch of data (a tuple) containing the input tensor of images and target labels.
 
-        :return: A tuple containing (in order):
-            - A tensor of losses.
-            - A tensor of predictions.
-            - A tensor of target labels.
-        """
-        image_lr, input_ids, attention_mask, image_hr = (
-            batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")
-        )
-        for t in self.net.diffusion_timesteps:    
-            noise = self.forward(
-                image_lr=image_lr, input_ids=input_ids, attention_mask=attention_mask,
-                timestep=t
-            )
-            
+    #     :return: A tuple containing (in order):
+    #         - A tensor of losses.
+    #         - A tensor of predictions.
+    #         - A tensor of target labels.
+    #     """
+    #     image_lr, input_ids, attention_mask, image_hr = (
+    #         batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")
+    #     )
+    #     for t in self.net.diffusion_timesteps:
+    #         noise = self.forward(
+    #             image_lr=image_lr, input_ids=input_ids, attention_mask=attention_mask,
+    #             timestep=t
+    #         )
 
-        # denormalize images for psnr calculation
-        # reconstructed = denormalize(reconstructed).clamp(0, 1)
-        image_hr = denormalize(image_hr).clamp(0, 1)
+    #     # denormalize images for psnr calculation
+    #     # reconstructed = denormalize(reconstructed).clamp(0, 1)
+    #     image_hr = denormalize(image_hr).clamp(0, 1)
 
-        loss = self.criterion(reconstructed, image_hr)
-        
-        return loss, reconstructed, image_hr
+    #     loss = self.criterion(reconstructed, image_hr)
+
+    #     return loss, reconstructed, image_hr
 
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
@@ -146,17 +204,52 @@ class TSRBaseModule(LightningModule):
         :param batch_idx: The index of the current batch.
         :return: A tensor of losses between model predictions and targets.
         """
-        loss, preds, targets = self.model_step(batch)
 
+        image_lr, input_ids, attention_mask, image_hr = (
+            batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")
+        )
+
+        # device = self.device
+        B = image_lr.shape[0]
+
+        input = image_hr - image_lr
+
+        noise = torch.randn_like(image_lr).to(self.device)
+        timesteps = torch.randint(
+            0, self.hparams.diff_steps, (B,), dtype=torch.int64, device=self.device
+        )
+        noisy_input = self.noise_scheduler.add_noise(input, noise, timesteps)
+
+        # loss, preds, targets = self.model_step(batch)
+        predicted_noise = self.forward(
+            x=noisy_input,
+            t=timesteps,
+            lr_image=image_lr,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+        )
+        recon_loss = self.recon_criterion(predicted_noise, noise)
+
+        refined_image = image_lr + self.get_clean_estimate(
+            predicted_noise, noisy_input, timesteps
+        )
+        clip_loss = self.similarity_criterion(
+            input_ids=input_ids,
+            pixel_values=refined_image,
+            attention_mask=attention_mask,
+        )
+        loss = recon_loss + self.hparams.beta * clip_loss
+        
         # update and log metrics
         self.train_loss(loss)
-        self.train_psnr(preds, targets)
+        # self.train_psnr(preds, targets)
+
         self.log(
-            "train/loss", self.train_loss, on_step=False, on_epoch=True, prog_bar=True
+            "train/loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True
         )
-        self.log(
-            "train/psnr", self.train_psnr, on_step=False, on_epoch=True, prog_bar=True
-        )
+        # self.log(
+        #     "train/psnr", self.train_psnr, on_step=False, on_epoch=True, prog_bar=True
+        # )
 
         # return loss or backpropagation will fail
         return loss
@@ -174,16 +267,21 @@ class TSRBaseModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
+
+        reconstructed, targets = self.inference_step(batch)
+        self.val_psnr(reconstructed, targets)
+        # loss, preds, targets = self.model_step(batch)
 
         # update and log metrics
-        self.val_loss(loss)
-        self.val_psnr(preds, targets)
-        self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log("val/psnr", self.val_psnr, on_step=False, on_epoch=True, prog_bar=True)
-        
+        # self.val_loss(loss)
+        # self.val_psnr(preds, targets)
+        # self.log("val/loss", self.val_loss, on_step=False, on_epoch=True, prog_bar=True)
+
+        self.log("val/psnr", self.val_psnr, on_step=True, on_epoch=True, prog_bar=True)
+
         if (
-            batch_idx == 0
+            batch_idx
+            == 0
             # and isinstance(self.logger, WandbLogger)
         ):
             # Only Log 16 images at max
@@ -194,15 +292,14 @@ class TSRBaseModule(LightningModule):
             # Log the reconstructed images
             self.logger.log_image(
                 key="val/pred_image",
-                images=list(preds[:max_images_logs]),
+                images=list(reconstructed[:max_images_logs]),
             )
-            
+
             # Log the ground truth images
             self.logger.log_image(
                 key="val/gt_image",
                 images=list(targets[:max_images_logs]),
             )
-            
 
     def on_validation_epoch_end(self) -> None:
         "Lightning hook that is called when a validation epoch ends."
@@ -223,14 +320,17 @@ class TSRBaseModule(LightningModule):
             labels.
         :param batch_idx: The index of the current batch.
         """
-        loss, preds, targets = self.model_step(batch)
 
-        # update and log metrics
-        self.test_loss(loss)
-        self.test_psnr(preds, targets)
-        self.log(
-            "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
-        )
+        reconstructed, targets = self.inference_step(batch)
+        self.test_psnr(reconstructed, targets)
+        # loss, preds, targets = self.model_step(batch)
+
+        # # update and log metrics
+        # self.test_loss(loss)
+        # self.test_psnr(preds, targets)
+        # self.log(
+        #     "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
+        # )
         self.log(
             "test/psnr", self.test_psnr, on_step=False, on_epoch=True, prog_bar=True
         )
@@ -267,7 +367,7 @@ class TSRBaseModule(LightningModule):
                 "optimizer": optimizer,
                 "lr_scheduler": {
                     "scheduler": scheduler,
-                    "monitor": "val/loss",
+                    # "monitor": "val/psnr",
                     "interval": "epoch",
                     "frequency": 1,
                 },
