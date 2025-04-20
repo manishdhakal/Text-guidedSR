@@ -22,23 +22,35 @@ trainer:
   max_epochs: 30
   # gradient_clip_val: 0.5
   accelerator: gpu
-  devices: 1
+  devices: [0,2,4,5]
+  precision: bf16
+  check_val_every_n_epoch: 100
+  strategy: ddp_find_unused_parameters_true
   
 
 model:
   optimizer:
-    lr: 0.02
+    lr: 1e-3
   net:
     hr_size: 224
+  
+  diff_steps: 1000
+  txt2img_similarity: true
+  img2img_similarity: false
+  beta_txt2img: 0.1
+  beta_img2img: 0.1
 
 data:
-  batch_size: 32
+  batch_size: 64
   scale: 16
+
+experiment_name: Text-Guided-SR-${data.scale}X
 
 logger:
   wandb:
     tags: ${tags}
     group: "TSR"
     project: "tsr"
+    name: ${experiment_name}
   # aim:
   #   experiment: "tsr8x"

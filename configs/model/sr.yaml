@@ -4,7 +4,7 @@ net:
   _target_: src.models.components.conditional_unet.ConditionalUNet
   hr_size: 224
   lr_emb_size: 128
-  text_emb_size: 128
+  text_emb_size: 0
   layers_per_block: 2
   block_out_channels: [32, 64, 128]
   down_block_types: ["DownBlock2D", "DownBlock2D", "DownBlock2D"]
@@ -14,6 +14,7 @@ optimizer:
   _target_: torch.optim.Adam
   _partial_: true
   lr: 1e-3
+
 
 scheduler:
   _target_: torch.optim.lr_scheduler.CosineAnnealingLR
@@ -25,7 +26,5 @@ scheduler:
 compile: false
 
 diff_steps: 1000
-txt2img_similarity: true
-img2img_similarity: true
-beta_txt2img: 0.1
-beta_img2img: 0.1
+txt2img_similarity: false
+img2img_similarity: false

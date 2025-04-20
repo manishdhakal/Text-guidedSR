@@ -13,7 +13,7 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["tsr8x", "coco2017"]
+tags: ["tsr2x", "coco2017"]
 
 seed: 12345
 
@@ -42,7 +42,7 @@ model:
 
 data:
   batch_size: 64
-  scale: 8
+  scale: 2
 
 experiment_name: Text-Guided-SR-${data.scale}X
 

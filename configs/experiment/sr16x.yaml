@@ -5,7 +5,7 @@
 
 defaults:
   - override /data: tsr
-  - override /model: tsr
+  - override /model: sr
   - override /callbacks: default
   - override /trainer: default
   - override /logger: wandb
@@ -13,7 +13,7 @@ defaults:
 # all parameters below will be merged with parameters from default configurations set above
 # this allows you to overwrite only specified parameters
 
-tags: ["tsr8x", "coco2017"]
+tags: ["sr16x", "coco2017"]
 
 seed: 12345
 
@@ -35,16 +35,15 @@ model:
     hr_size: 224
   
   diff_steps: 1000
-  txt2img_similarity: true
+  txt2img_similarity: false
   img2img_similarity: false
-  beta_txt2img: 0.1
-  beta_img2img: 0.1
+
 
 data:
   batch_size: 64
-  scale: 8
+  scale: 16
 
-experiment_name: Text-Guided-SR-${data.scale}X
+experiment_name: SR-${data.scale}X
 
 logger:
   wandb:

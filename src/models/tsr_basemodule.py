@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple, List
+from typing import Any, Dict, Tuple, List, Optional, Literal
 
 import torch
 from lightning import LightningModule
@@ -67,8 +67,11 @@ class TSRBaseModule(LightningModule):
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
         compile: bool,
-        diff_steps=100,
-        beta: float = 0.1,
+        diff_steps: int = 1000,
+        txt2img_similarity: bool = True,
+        img2img_similarity: bool = True,
+        beta_txt2img: float = 0.1,
+        beta_img2img: float = 0.1,
     ) -> None:
         """Initialize a `MNISTLitModule`.
 
@@ -91,8 +94,15 @@ class TSRBaseModule(LightningModule):
 
         # loss function
         self.recon_criterion = torch.nn.MSELoss()
-        self.similarity_criterion = CLIPSimilarityLoss(clip_model=self.net.clip_model)
 
+        if txt2img_similarity:
+            self.txt2img_similarity_criterion = CLIPSimilarityLoss(
+                sim_type="txt2img", clip_model=self.net.clip_model
+            )
+        if img2img_similarity:
+            self.img2img_similarity_criterion = CLIPSimilarityLoss(
+                sim_type="img2img", clip_model=self.net.clip_model
+            )
         # metric objects for calculating and averaging accuracy across batches
         # self.train_psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.val_psnr = PeakSignalNoiseRatio(data_range=1.0)
@@ -119,7 +129,7 @@ class TSRBaseModule(LightningModule):
         :return: The clean estimate of the input image.
         """
         B = noisy_input.shape[0]
-        
+
         alpha_cumprod = self.noise_scheduler.alphas_cumprod[timesteps].to(self.device)
         sqrt_alpha_prod = torch.sqrt(alpha_cumprod).view(B, 1, 1, 1)
         sqrt_one_minus_alpha_prod = torch.sqrt(1 - alpha_cumprod).view(B, 1, 1, 1)
@@ -165,35 +175,6 @@ class TSRBaseModule(LightningModule):
         self.val_psnr.reset()
         self.val_psnr_best.reset()
 
-    # def model_step(
-    #     self, batch: Tuple[torch.Tensor, torch.Tensor]
-    # ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    #     """Perform a single model step on a batch of data.
-
-    #     :param batch: A batch of data (a tuple) containing the input tensor of images and target labels.
-
-    #     :return: A tuple containing (in order):
-    #         - A tensor of losses.
-    #         - A tensor of predictions.
-    #         - A tensor of target labels.
-    #     """
-    #     image_lr, input_ids, attention_mask, image_hr = (
-    #         batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")
-    #     )
-    #     for t in self.net.diffusion_timesteps:
-    #         noise = self.forward(
-    #             image_lr=image_lr, input_ids=input_ids, attention_mask=attention_mask,
-    #             timestep=t
-    #         )
-
-    #     # denormalize images for psnr calculation
-    #     # reconstructed = denormalize(reconstructed).clamp(0, 1)
-    #     image_hr = denormalize(image_hr).clamp(0, 1)
-
-    #     loss = self.criterion(reconstructed, image_hr)
-
-    #     return loss, reconstructed, image_hr
-
     def training_step(
         self, batch: Tuple[torch.Tensor, torch.Tensor], batch_idx: int
     ) -> torch.Tensor:
@@ -230,26 +211,28 @@ class TSRBaseModule(LightningModule):
         )
         recon_loss = self.recon_criterion(predicted_noise, noise)
 
-        refined_image = image_lr + self.get_clean_estimate(
-            predicted_noise, noisy_input, timesteps
-        )
-        clip_loss = self.similarity_criterion(
-            input_ids=input_ids,
-            pixel_values=refined_image,
-            attention_mask=attention_mask,
-        )
-        loss = recon_loss + self.hparams.beta * clip_loss
-        
+        loss = recon_loss
+        if self.hparams.img2img_similarity or self.hparams.txt2img_similarity:
+            refined_image = image_lr + self.get_clean_estimate(
+                predicted_noise, noisy_input, timesteps
+            )
+            if self.hparams.txt2img_similarity:
+                loss += self.hparams.beta_txt2img * self.txt2img_similarity_criterion(
+                    x1=input_ids,
+                    x2=refined_image,
+                    attention_mask=attention_mask,
+                )
+            if self.hparams.img2img_similarity:
+                loss += self.hparams.beta_img2img * self.img2img_similarity_criterion(
+                    x1=image_hr, x2=refined_image
+                )
+
         # update and log metrics
         self.train_loss(loss)
-        # self.train_psnr(preds, targets)
 
         self.log(
             "train/loss", self.train_loss, on_step=True, on_epoch=True, prog_bar=True
         )
-        # self.log(
-        #     "train/psnr", self.train_psnr, on_step=False, on_epoch=True, prog_bar=True
-        # )
 
         # return loss or backpropagation will fail
         return loss
@@ -332,7 +315,7 @@ class TSRBaseModule(LightningModule):
         #     "test/loss", self.test_loss, on_step=False, on_epoch=True, prog_bar=True
         # )
         self.log(
-            "test/psnr", self.test_psnr, on_step=False, on_epoch=True, prog_bar=True
+            "test/psnr", self.test_psnr, on_step=True, on_epoch=True, prog_bar=True
         )
 
     def on_test_epoch_end(self) -> None:
