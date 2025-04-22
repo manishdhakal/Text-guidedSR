@@ -24,7 +24,7 @@ trainer:
   accelerator: gpu
   devices: [0,2,4,5]
   precision: bf16
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: 30
   strategy: ddp_find_unused_parameters_true
   
 

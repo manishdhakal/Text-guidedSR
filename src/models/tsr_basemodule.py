@@ -1,6 +1,7 @@
 from typing import Any, Dict, Tuple, List, Optional, Literal
 
 import torch
+from torch import nn
 from lightning import LightningModule
 from torchmetrics import MaxMetric, MeanMetric
 from torchmetrics.image import PeakSignalNoiseRatio
@@ -13,6 +14,12 @@ from src.losses.clip_sim_loss import CLIPSimilarityLoss
 
 
 # torch.autograd.set_detect_anomaly(True)
+
+
+def PatchUpsample(x, scale):
+    n, c, h, w = x.shape
+    x = torch.zeros(n, c, h, scale, w, scale).to(x.device) + x.view(n, c, h, 1, w, 1)
+    return x.view(n, c, h * scale, w * scale)
 
 
 def denormalize(
@@ -63,7 +70,7 @@ class TSRBaseModule(LightningModule):
 
     def __init__(
         self,
-        net: torch.nn.Module,
+        net: nn.Module,
         optimizer: torch.optim.Optimizer,
         scheduler: torch.optim.lr_scheduler,
         compile: bool,
@@ -93,7 +100,7 @@ class TSRBaseModule(LightningModule):
         )
 
         # loss function
-        self.recon_criterion = torch.nn.MSELoss()
+        self.recon_criterion = nn.MSELoss()
 
         if txt2img_similarity:
             self.txt2img_similarity_criterion = CLIPSimilarityLoss(
@@ -115,6 +122,11 @@ class TSRBaseModule(LightningModule):
 
         # for tracking best so far validation accuracy
         self.val_psnr_best = MaxMetric()
+
+        # self.A = nn.AdaptiveAvgPool2d(
+        #     (self.net.hr_size // self.net.scale, self.net.hr_size // self.scale)
+        # )
+        # self.Ap = lambda z: PatchUpsample(z, scale=self.net.scale)
 
     def get_clean_estimate(
         self,
@@ -139,6 +151,7 @@ class TSRBaseModule(LightningModule):
             noisy_input - sqrt_one_minus_alpha_prod * predicted_noise
         ) / sqrt_alpha_prod
 
+    # def rectify() 
     def inference_step(self, batch) -> None:
         image_lr, input_ids, attention_mask, image_hr = (
             batch[k] for k in ("image_lr", "input_ids", "attention_mask", "image_hr")

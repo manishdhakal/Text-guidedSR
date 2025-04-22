@@ -24,8 +24,9 @@ trainer:
   accelerator: gpu
   devices: [0,2,4,5]
   precision: bf16
-  check_val_every_n_epoch: 100
+  check_val_every_n_epoch: ${trainer.max_epochs}
   strategy: ddp_find_unused_parameters_true
+
   
 
 model:
@@ -33,6 +34,7 @@ model:
     lr: 1e-3
   net:
     hr_size: 224
+    scale: ${data.scale}
   
   diff_steps: 1000
   txt2img_similarity: true

@@ -9,6 +9,7 @@ net:
   block_out_channels: [32, 64, 128]
   down_block_types: ["DownBlock2D", "DownBlock2D", "DownBlock2D"]
   up_block_types: ["UpBlock2D", "UpBlock2D", "UpBlock2D"]
+  scale: ??
 
 optimizer:
   _target_: torch.optim.Adam
