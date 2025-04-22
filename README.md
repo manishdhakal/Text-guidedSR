@@ -58,4 +58,11 @@ Each of the caption files (`llava1.5_coco2017train_captions.json` and `llava1.5_
 
 ```
 
-### 
+## Training
+
+```bash
+for scale in 2 4 8 16;
+do
+  python src/train.py experiment=tsr${scale}x
+done
+```
